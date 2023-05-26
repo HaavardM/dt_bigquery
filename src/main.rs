@@ -44,8 +44,6 @@ struct Config {
     project_id: String,
     table_id: String,
     jwt_key: String,
-    key_file: String,
-    
 }
 
 #[tokio::main]
@@ -55,8 +53,6 @@ async fn main() {
         version: "0.0.1".to_owned(),
     }), true);
 
-    let key_file =
-        env::var("GOOGLE_APPLICATION_CREDENTIALS").expect("Missing GOOGLE_APPLICATION_CREDENTIALS");
 
     let bq_dataset = env::var("DATASET").expect("Missing DATASET");
 
@@ -81,7 +77,6 @@ async fn main() {
             table_id: bq_table.clone(),
             project_id: bq_project.clone(),
             jwt_key: signature_key.clone(),
-            key_file: key_file.clone(),
         }))
         .and_then(
             |r: DTRequest, signature: String, config: Config, | async move {
@@ -94,7 +89,7 @@ async fn main() {
                     return Err(warp::reject());
                 }
 
-                let bq_client = bq::Client::from_service_account_key_file(&config.key_file).await;
+                let bq_client = bq::Client::from_application_default_credentials().await.expect("Failed to create BQ client");
                 let mut insert = TableDataInsertAllRequest::new();
                 insert
                     .add_row(

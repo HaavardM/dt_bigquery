@@ -8,9 +8,9 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1", features = ["rt"] }
 warp = "0.3"
-gcp-bigquery-client = {version = "0.10.2", features=["rust-tls"]}
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+gcp-bigquery-client = {version = "0.16.7", features=["rust-tls"]}
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 bytes = "1.1.0"
 jsonwebtoken = "7"
 stackdriver_logger = "*"

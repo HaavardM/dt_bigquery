@@ -1,6 +1,6 @@
-FROM rust:1.57-alpine AS build
+FROM rust:1.69-alpine AS build
 
-RUN apk add --no-cache alpine-sdk
+RUN apk add --no-cache build-base musl-dev openssl-dev openssl
 
 WORKDIR /usr/src/app
 
@@ -8,11 +8,14 @@ WORKDIR /usr/src/app
 COPY Cargo.lock .
 COPY Cargo.toml .
 
-RUN rm -rf src
+RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN cargo fetch
+RUN cargo build --release
+RUN rm src/main.rs
 
-COPY . .
-
-RUN cargo install --path .
+COPY src ./src/
+RUN touch src/main.rs
+RUN cargo build --release
 
 FROM alpine
 
