@@ -38,7 +38,7 @@ struct BQRow<'a> {
 #[derive(Deserialize)]
 struct Claims {}
 
-struct Config{
+struct Config {
     dataset_id: String,
     project_id: String,
     table_id: String,
@@ -48,13 +48,7 @@ struct Config{
 
 #[tokio::main]
 async fn main() {
-    stackdriver_logger::init_with(
-        Some(stackdriver_logger::Service {
-            name: "dt-bigquery".to_owned(),
-            version: "0.0.1".to_owned(),
-        }),
-        true,
-    );
+    stackdriver_logger::init_with_cargo!();
 
     let bq_dataset = env::var("DATASET").expect("Missing DATASET");
 
@@ -87,7 +81,13 @@ async fn main() {
         }))
         .and_then(handler)
         .with(warp::log::custom(|info| {
-            log::info!("{} -> {} = {}", info.method(), info.path(), info.status())
+            let mut level = log::Level::Info;
+            if info.status().is_client_error() {
+               level = log::Level::Warn; 
+            } else if info.status().is_server_error() {
+                level = log::Level::Error;
+            }
+            log::log!(level, "{} -> {} = {}", info.method(), info.path(), info.status())
         }));
     log::info!("Starting warp server");
     let server = warp::serve(f).run(([0, 0, 0, 0], port));
@@ -132,7 +132,8 @@ async fn handler(
             },
         )
         .expect("Insert should never fail");
-    let resp = config.bq_client
+    let resp = config
+        .bq_client
         .tabledata()
         .insert_all(
             &config.project_id,
