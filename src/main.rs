@@ -1,13 +1,13 @@
+use futures::stream::StreamExt;
 use gcp_bigquery_client as bq;
 use gcp_bigquery_client::model::table_data_insert_all_request::TableDataInsertAllRequest;
 use jsonwebtoken as jwt;
 use serde::{Deserialize, Serialize};
+use signal_hook_tokio::Signals;
 use std::collections::HashMap;
 use std::env;
 use warp::hyper::StatusCode;
-use warp::{Filter};
-use signal_hook_tokio::Signals;
-use futures::stream::StreamExt;
+use warp::Filter;
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -36,23 +36,25 @@ struct BQRow<'a> {
 }
 
 #[derive(Deserialize)]
-struct Claims {
-}
+struct Claims {}
 
-struct Config {
+struct Config{
     dataset_id: String,
     project_id: String,
     table_id: String,
     jwt_key: String,
+    bq_client: bq::Client,
 }
 
 #[tokio::main]
 async fn main() {
-    stackdriver_logger::init_with(Some(stackdriver_logger::Service {
-        name: "dt-bigquery".to_owned(),
-        version: "0.0.1".to_owned(),
-    }), true);
-
+    stackdriver_logger::init_with(
+        Some(stackdriver_logger::Service {
+            name: "dt-bigquery".to_owned(),
+            version: "0.0.1".to_owned(),
+        }),
+        true,
+    );
 
     let bq_dataset = env::var("DATASET").expect("Missing DATASET");
 
@@ -60,13 +62,17 @@ async fn main() {
 
     let bq_table = env::var("TABLE").expect("Missing TABLE");
 
-    let signature_key = env::var("SIGNATURE")
-        .expect("Missing SIGNATURE env");
+    let signature_key = env::var("SIGNATURE").expect("Missing SIGNATURE env");
 
     let port: u16 = env::var("PORT")
         .expect("Missing PORT")
         .parse()
         .expect("PORT must be integer");
+
+    // Initialize the BQ client
+    let bq_client = bq::Client::from_application_default_credentials()
+        .await
+        .expect("Failed to create BQ client");
 
     let f = warp::path!("dtconn")
         .and(warp::post())
@@ -77,48 +83,16 @@ async fn main() {
             table_id: bq_table.clone(),
             project_id: bq_project.clone(),
             jwt_key: signature_key.clone(),
+            bq_client: bq_client.clone(),
         }))
-        .and_then(
-            |r: DTRequest, signature: String, config: Config, | async move {
-                if let Err(_) = jwt::decode::<Claims>(
-                    &signature,
-                    &jwt::DecodingKey::from_secret(config.jwt_key.as_bytes()),
-                    &jwt::Validation::new(jwt::Algorithm::HS256),
-                ) {
-                    log::error!("Invalid signature");
-                    return Err(warp::reject());
-                }
-
-                let bq_client = bq::Client::from_application_default_credentials().await.expect("Failed to create BQ client");
-                let mut insert = TableDataInsertAllRequest::new();
-                insert
-                    .add_row(
-                        Some(r.event.event_id.clone()),
-                        BQRow {
-                            event_id: &r.event.event_id,
-                            timestamp: &r.event.timestamp,
-                            target_name: &r.event.target_name,
-                            event_type: &r.event.event_type,
-                            data: &serde_json::to_string(&r.event.data).unwrap_or("{}".into()),
-                            labels: &serde_json::to_string(&r.labels).unwrap_or("{}".into()),
-                        },
-                    )
-                    .expect("Insert should never fail");
-                let resp = bq_client
-                    .tabledata()
-                    .insert_all(&config.project_id, &config.dataset_id, &config.table_id, insert)
-                    .await;
-                
-                resp.and(Ok(StatusCode::OK)).or(Err(warp::reject()))
-            },
-        )
+        .and_then(handler)
         .with(warp::log::custom(|info| {
-            log::info!("{} -> {} = {}", info.method(), info.path(), info.status())        
+            log::info!("{} -> {} = {}", info.method(), info.path(), info.status())
         }));
     log::info!("Starting warp server");
     let server = warp::serve(f).run(([0, 0, 0, 0], port));
     let signals = Signals::new(&[signal_hook::consts::SIGINT]).expect("SIGINT should be supported");
-    let handle= signals.handle();
+    let handle = signals.handle();
     let mut signals = signals.fuse();
 
     tokio::select! {
@@ -128,4 +102,45 @@ async fn main() {
 
     handle.close();
     log::info!("Shutting down, thanks for now! :)")
+}
+
+async fn handler(
+    r: DTRequest,
+    signature: String,
+    config: Config,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    if let Err(_) = jwt::decode::<Claims>(
+        &signature,
+        &jwt::DecodingKey::from_secret(config.jwt_key.as_bytes()),
+        &jwt::Validation::new(jwt::Algorithm::HS256),
+    ) {
+        log::error!("Invalid signature");
+        return Err(warp::reject());
+    }
+
+    let mut insert = TableDataInsertAllRequest::new();
+    insert
+        .add_row(
+            Some(r.event.event_id.clone()),
+            BQRow {
+                event_id: &r.event.event_id,
+                timestamp: &r.event.timestamp,
+                target_name: &r.event.target_name,
+                event_type: &r.event.event_type,
+                data: &serde_json::to_string(&r.event.data).unwrap_or("{}".into()),
+                labels: &serde_json::to_string(&r.labels).unwrap_or("{}".into()),
+            },
+        )
+        .expect("Insert should never fail");
+    let resp = config.bq_client
+        .tabledata()
+        .insert_all(
+            &config.project_id,
+            &config.dataset_id,
+            &config.table_id,
+            insert,
+        )
+        .await;
+
+    resp.and(Ok(StatusCode::OK)).or(Err(warp::reject()))
 }
