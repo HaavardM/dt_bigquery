@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1", features = ["rt"] }
 warp = "0.3"
-gcp-bigquery-client = {version = "0.16.7", features=["rust-tls"]}
+gcp-bigquery-client = {version = "0.17.1", features=["rust-tls"]}
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 bytes = "1.1.0"
@@ -18,3 +18,4 @@ log = "*"
 signal-hook = { version="0.3"}
 signal-hook-tokio = { version = "0.3", features=["futures-v0_3"]}
 futures = "0.3"
+envconfig = { version = "0.10.0" }

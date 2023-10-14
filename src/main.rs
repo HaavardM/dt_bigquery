@@ -5,9 +5,28 @@ use jsonwebtoken as jwt;
 use serde::{Deserialize, Serialize};
 use signal_hook_tokio::Signals;
 use std::collections::HashMap;
-use std::env;
 use warp::hyper::StatusCode;
 use warp::Filter;
+
+use envconfig::Envconfig;
+
+#[derive(Envconfig, Clone)]
+struct Config {
+    #[envconfig(from = "DATASET")]
+    pub bq_dataset: String,
+
+    #[envconfig(from = "PROJECT_ID")]
+    pub bq_project: String,
+
+    #[envconfig(from = "TABLE")]
+    pub bq_table: String,
+
+    #[envconfig(from = "SIGNATURE")]
+    pub signature_secret: String,
+
+    #[envconfig(from = "PORT", default = "8080")]
+    pub port: u16,
+}
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -38,56 +57,39 @@ struct BQRow<'a> {
 #[derive(Deserialize)]
 struct Claims {}
 
-struct Config {
-    dataset_id: String,
-    project_id: String,
-    table_id: String,
-    jwt_key: String,
-    bq_client: bq::Client,
-}
-
 #[tokio::main]
 async fn main() {
     stackdriver_logger::init_with_cargo!();
 
-    let bq_dataset = env::var("DATASET").expect("Missing DATASET");
-
-    let bq_project = env::var("PROJECT_ID").expect("Missing PROJECT_ID");
-
-    let bq_table = env::var("TABLE").expect("Missing TABLE");
-
-    let signature_key = env::var("SIGNATURE").expect("Missing SIGNATURE env");
-
-    let port: u16 = env::var("PORT")
-        .expect("Missing PORT")
-        .parse()
-        .expect("PORT must be integer");
+    let config = Config::init_from_env().unwrap();
+    let port = config.port;
 
     // Initialize the BQ client
     let bq_client = bq::Client::from_application_default_credentials()
         .await
         .expect("Failed to create BQ client");
-
+    // Configure the HTTP server to accept events from the DT data-connector
     let f = warp::path!("dtconn")
         .and(warp::post())
         .and(warp::body::json())
         .and(warp::header::<String>("x-dt-signature"))
-        .and(warp::any().map(move || Config {
-            dataset_id: bq_dataset.clone(),
-            table_id: bq_table.clone(),
-            project_id: bq_project.clone(),
-            jwt_key: signature_key.clone(),
-            bq_client: bq_client.clone(),
-        }))
+        .and(warp::any().map(move || bq_client.clone()))
+        .and(warp::any().map(move || config.clone()))
         .and_then(handler)
         .with(warp::log::custom(|info| {
             let mut level = log::Level::Info;
             if info.status().is_client_error() {
-               level = log::Level::Warn; 
+                level = log::Level::Warn;
             } else if info.status().is_server_error() {
                 level = log::Level::Error;
             }
-            log::log!(level, "{} -> {} = {}", info.method(), info.path(), info.status())
+            log::log!(
+                level,
+                "{} -> {} = {}",
+                info.method(),
+                info.path(),
+                info.status()
+            )
         }));
     log::info!("Starting warp server");
     let server = warp::serve(f).run(([0, 0, 0, 0], port));
@@ -107,14 +109,15 @@ async fn main() {
 async fn handler(
     r: DTRequest,
     signature: String,
+    client: bq::Client,
     config: Config,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     if let Err(_) = jwt::decode::<Claims>(
         &signature,
-        &jwt::DecodingKey::from_secret(config.jwt_key.as_bytes()),
+        &jwt::DecodingKey::from_secret(config.signature_secret.as_bytes()),
         &jwt::Validation::new(jwt::Algorithm::HS256),
     ) {
-        log::error!("Invalid signature");
+        log::error!("invalid signature");
         return Err(warp::reject());
     }
 
@@ -132,13 +135,12 @@ async fn handler(
             },
         )
         .expect("Insert should never fail");
-    let resp = config
-        .bq_client
+    let resp = client
         .tabledata()
         .insert_all(
-            &config.project_id,
-            &config.dataset_id,
-            &config.table_id,
+            &config.bq_project,
+            &config.bq_dataset,
+            &config.bq_table,
             insert,
         )
         .await;

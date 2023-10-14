@@ -1,4 +1,4 @@
-FROM rust:1.69-alpine AS build
+FROM rust:1.73-alpine AS build
 
 RUN apk add --no-cache build-base musl-dev openssl-dev openssl
 
