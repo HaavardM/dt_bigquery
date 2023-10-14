@@ -28,7 +28,7 @@ struct Config {
     pub port: u16,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct Event {
     event_id: String,
@@ -38,7 +38,7 @@ struct Event {
     data: HashMap<String, serde_json::Value>,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Debug)]
 struct DTRequest {
     event: Event,
     labels: HashMap<String, String>,
